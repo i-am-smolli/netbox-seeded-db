@@ -76,10 +76,10 @@ else
   fi
 
   for VERSION in ${UPSTREAM_RELEASES}; do
-    if [ -n "${EXISTING_TAGS}" ] && echo "${EXISTING_TAGS}" | grep -q "^${VERSION}$"; then
+    if [ "${FORCE_REBUILD:-false}" != "true" ] && [ -n "${EXISTING_TAGS}" ] && echo "${EXISTING_TAGS}" | grep -q "^${VERSION}$"; then
       echo "✅ Version ${VERSION} already released. Skipping."
     else
-      echo "⚡ Version ${VERSION} is MISSING!"
+      echo "⚡ Version ${VERSION} will be built!"
       MISSING_VERSIONS="${MISSING_VERSIONS} ${VERSION}"
     fi
   done

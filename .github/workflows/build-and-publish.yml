@@ -57,6 +57,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           FORCE_VERSION: ${{ github.event.inputs.version || '' }}
+          FORCE_REBUILD: ${{ github.event.inputs.force_rebuild || 'false' }}
           MIN_VERSION: ${{ github.event.inputs.min_version || 'v4.4.10' }}
           MAX_CHECK_RELEASES: 50
         run: |
@@ -82,6 +83,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to GitHub Container Registry (GHCR)
         uses: docker/login-action@v3
         with:
@@ -106,8 +113,9 @@ jobs:
           chmod +x ./scripts/test-dump.sh
           ./scripts/test-dump.sh "${{ matrix.version }}"
 
-      - name: Push Docker Image to GHCR
+      - name: Build & Push Multi-Arch Docker Image (linux/amd64, linux/arm64) to GHCR
         env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
           TARGET_VERSION: ${{ matrix.version }}
           LATEST_UPSTREAM: ${{ needs.check-versions.outputs.latest_upstream }}
@@ -115,16 +123,28 @@ jobs:
         run: |
           OWNER_LOWER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
           IMAGE_BASE="ghcr.io/${OWNER_LOWER}/netbox-postgres-seeded"
-          
-          echo "⬆️ Pushing ${IMAGE_BASE}:${TARGET_VERSION}..."
-          docker push "${IMAGE_BASE}:${TARGET_VERSION}"
+          DUMP_PATH="dist/netbox-${TARGET_VERSION}.sql.gz"
 
-          # Tag and push :latest if target matches latest upstream or explicitly requested
+          BUILD_CONTEXT=$(mktemp -d)
+          cp "${DUMP_PATH}" "${BUILD_CONTEXT}/dump.sql.gz"
+          cp Dockerfile "${BUILD_CONTEXT}/Dockerfile"
+
+          TAG_ARGS=("-t" "${IMAGE_BASE}:${TARGET_VERSION}")
           if [ "${TARGET_VERSION}" == "${LATEST_UPSTREAM}" ] || [ "${TARGET_VERSION}" == "latest" ] || [ "${MANUAL_TAG_LATEST}" == "true" ]; then
-            echo "🏷️ Tagging and pushing as ${IMAGE_BASE}:latest..."
-            docker tag "${IMAGE_BASE}:${TARGET_VERSION}" "${IMAGE_BASE}:latest"
-            docker push "${IMAGE_BASE}:latest"
+            TAG_ARGS+=("-t" "${IMAGE_BASE}:latest")
           fi
+
+          echo "⬆️ Building and pushing multi-platform image (linux/amd64, linux/arm64) for ${TARGET_VERSION}..."
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            "${TAG_ARGS[@]}" \
+            --build-arg NETBOX_VERSION="${TARGET_VERSION}" \
+            --build-arg GITHUB_REPOSITORY="${GITHUB_REPOSITORY}" \
+            -f "${BUILD_CONTEXT}/Dockerfile" \
+            --push \
+            "${BUILD_CONTEXT}"
+
+          rm -rf "${BUILD_CONTEXT}"
 
       - name: Create GitHub Release & Upload SQL Dump Asset
         env:
