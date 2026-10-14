@@ -1,0 +1,64 @@
+stages:
+  - check-upstream
+  - build-seeded-image
+
+variables:
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_TLS_CERTDIR: ""
+  IMAGE_TAG_BASE: "$CI_REGISTRY_IMAGE"
+
+# ------------------------------------------------------------------------------
+# 1. Scheduled Job: Check for new NetBox releases and trigger builds
+# ------------------------------------------------------------------------------
+check-new-releases:
+  stage: check-upstream
+  image: alpine:latest
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $MANUAL_VERSION == null'
+  before_script:
+    - apk add --no-cache bash curl jq
+  script:
+    - chmod +x ./scripts/check-new-versions.sh
+    - ./scripts/check-new-versions.sh
+
+# ------------------------------------------------------------------------------
+# 2. Build Job: Starts Netbox in tmpfs, dumps DB, builds and pushes seeded image
+# ------------------------------------------------------------------------------
+build-seeded-postgres:
+  stage: build-seeded-image
+  image: docker:27-cli
+  services:
+    - docker:27-dind
+  rules:
+    # Triggered automatically by check-new-releases via API
+    - if: '$BUILD_VERSION'
+    # Triggered manually via GitLab UI (Run Pipeline) with variable MANUAL_VERSION
+    - if: '$CI_PIPELINE_SOURCE == "web" && $MANUAL_VERSION'
+    # Fallback default on push to main
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      variables:
+        BUILD_VERSION: "latest"
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - apk add --no-cache bash curl docker-cli-compose gzip
+  script:
+    - TARGET_VERSION="${BUILD_VERSION:-${MANUAL_VERSION:-latest}}"
+    - echo "🏗️ Building pre-seeded database for NetBox version: ${TARGET_VERSION}"
+    - chmod +x ./scripts/build-seeded-db.sh
+    - ./scripts/build-seeded-db.sh "${TARGET_VERSION}"
+    - echo "🧪 Testing generated SQL dump before pushing..."
+    - chmod +x ./scripts/test-dump.sh
+    - ./scripts/test-dump.sh "${TARGET_VERSION}"
+    - echo "⬆️ Pushing Docker image to registry..."
+    - docker push "${CI_REGISTRY_IMAGE}:${TARGET_VERSION}"
+    - |
+      if [ "${TAG_AS_LATEST:-false}" == "true" ] || [ "${TARGET_VERSION}" == "latest" ]; then
+        docker tag "${CI_REGISTRY_IMAGE}:${TARGET_VERSION}" "${CI_REGISTRY_IMAGE}:latest"
+        docker push "${CI_REGISTRY_IMAGE}:latest"
+      fi
+  artifacts:
+    name: "netbox-db-dump-$CI_COMMIT_REF_SLUG"
+    paths:
+      - dist/*.sql.gz
+    expire_in: 30 days

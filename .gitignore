@@ -1,0 +1,6 @@
+.DS_Store
+dist/
+*.dump
+*.sql
+*.sql.gz
+/tmp/

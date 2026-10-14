@@ -1,0 +1,66 @@
+# ==============================================================================
+# Example: Downstream GitHub Actions Workflow
+#
+# Demonstrates how any GitHub repository can boot NetBox in under 5 seconds
+# using the pre-seeded PostgreSQL image from GitHub Container Registry (ghcr.io),
+# and run Pytest, Ansible, Terraform, or API tests against it.
+# ==============================================================================
+name: Test Against Ephemeral NetBox
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  netbox-tests:
+    name: Run NetBox Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Start Pre-Seeded NetBox Stack
+        env:
+          # Pull the pre-migrated database image (no login required - public GHCR package)
+          NETBOX_SEEDED_IMAGE: "ghcr.io/i-am-smolli/netbox-postgres-seeded:latest"
+          NETBOX_VERSION: "latest"
+        run: |
+          echo "⏱️ Starting NetBox environment..."
+          START_TIME=$(date +%s)
+          docker compose -f examples/consumer-docker-compose.yml up -d
+          echo "START_TIME=${START_TIME}" >> $GITHUB_ENV
+
+      - name: Wait for NetBox Health Check
+        run: |
+          echo "⏳ Waiting for NetBox to be healthy (typically ~3-5 seconds)..."
+          until [ "$(docker inspect -f '{{.State.Health.Status}}' $(docker compose -f examples/consumer-docker-compose.yml ps -q netbox))" == "healthy" ]; do
+            sleep 1
+            printf "."
+          done
+          END_TIME=$(date +%s)
+          START_TIME=${{ env.START_TIME }}
+          ELAPSED=$((END_TIME - START_TIME))
+          echo -e "\n🚀 NetBox is ready and healthy in ${ELAPSED} seconds!"
+
+      - name: Verify API Authentication
+        run: |
+          chmod +x ./examples/test-api.sh
+          ./examples/test-api.sh http://127.0.0.1:8000
+
+      # ------------------------------------------------------------------------
+      # Execute your downstream test suite here:
+      # ------------------------------------------------------------------------
+      # - name: Run Pytest / Ansible / Terraform tests
+      #   env:
+      #     NETBOX_URL: "http://127.0.0.1:8000"
+      #     NETBOX_TOKEN: "nbt_haiweeni2Aiv.ahgeechahdaighah6queivoo6ahChahgo2ohch9inahyei5ahk"
+      #   run: |
+      #     pytest tests/
+
+      - name: Teardown NetBox Environment
+        if: always()
+        run: |
+          docker compose -f examples/consumer-docker-compose.yml down -v

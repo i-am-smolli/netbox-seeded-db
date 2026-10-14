@@ -1,0 +1,218 @@
+name: Build & Publish NetBox Seeded Database
+
+on:
+  schedule:
+    # Run once daily at 03:00 UTC to discover new NetBox releases
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'NetBox version to build (e.g. v4.7.3, latest, or all-missing)'
+        required: true
+        default: 'all-missing'
+      min_version:
+        description: 'Minimum NetBox version to check back to (default: v4.4.10)'
+        required: false
+        default: 'v4.4.10'
+      force_rebuild:
+        description: 'Rebuild and overwrite release assets if they already exist'
+        required: false
+        type: boolean
+        default: false
+      tag_as_latest:
+        description: 'Also tag and push this Docker image as :latest'
+        required: false
+        type: boolean
+        default: false
+  push:
+    branches:
+      - main
+    paths:
+      - 'scripts/**'
+      - 'Dockerfile'
+      - '.github/workflows/**'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  # ----------------------------------------------------------------------------
+  # 1. Discover missing releases
+  # ----------------------------------------------------------------------------
+  check-versions:
+    name: Check Upstream Releases
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.check.outputs.versions }}
+      has_versions: ${{ steps.check.outputs.has_versions }}
+      latest_upstream: ${{ steps.check.outputs.latest_upstream }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect new upstream NetBox versions
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          FORCE_VERSION: ${{ github.event.inputs.version || '' }}
+          MIN_VERSION: ${{ github.event.inputs.min_version || 'v4.4.10' }}
+          MAX_CHECK_RELEASES: 50
+        run: |
+          chmod +x ./scripts/check-new-versions.sh
+          ./scripts/check-new-versions.sh "${FORCE_VERSION}"
+
+  # ----------------------------------------------------------------------------
+  # 2. Build, test, and publish seeded database image and raw SQL dump
+  # ----------------------------------------------------------------------------
+  build-and-publish:
+    name: Build NetBox ${{ matrix.version }}
+    needs: check-versions
+    if: needs.check-versions.outputs.has_versions == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        version: ${{ fromJson(needs.check-versions.outputs.versions) }}
+      fail-fast: false
+      max-parallel: 3
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Pre-Seeded NetBox Database
+        id: build
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          IMAGE_NAME: netbox-postgres-seeded
+          BUILD_TIMEOUT: "720"
+        run: |
+          chmod +x ./scripts/build-seeded-db.sh ./examples/test-api.sh
+          ./scripts/build-seeded-db.sh "${{ matrix.version }}"
+
+      - name: Validate SQL Dump Integrity & Benchmark Startup
+        id: test
+        run: |
+          chmod +x ./scripts/test-dump.sh
+          ./scripts/test-dump.sh "${{ matrix.version }}"
+
+      - name: Push Docker Image to GHCR
+        env:
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          TARGET_VERSION: ${{ matrix.version }}
+          LATEST_UPSTREAM: ${{ needs.check-versions.outputs.latest_upstream }}
+          MANUAL_TAG_LATEST: ${{ github.event.inputs.tag_as_latest || 'false' }}
+        run: |
+          OWNER_LOWER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_BASE="ghcr.io/${OWNER_LOWER}/netbox-postgres-seeded"
+          
+          echo "⬆️ Pushing ${IMAGE_BASE}:${TARGET_VERSION}..."
+          docker push "${IMAGE_BASE}:${TARGET_VERSION}"
+
+          # Tag and push :latest if target matches latest upstream or explicitly requested
+          if [ "${TARGET_VERSION}" == "${LATEST_UPSTREAM}" ] || [ "${TARGET_VERSION}" == "latest" ] || [ "${MANUAL_TAG_LATEST}" == "true" ]; then
+            echo "🏷️ Tagging and pushing as ${IMAGE_BASE}:latest..."
+            docker tag "${IMAGE_BASE}:${TARGET_VERSION}" "${IMAGE_BASE}:latest"
+            docker push "${IMAGE_BASE}:latest"
+          fi
+
+      - name: Create GitHub Release & Upload SQL Dump Asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          TARGET_VERSION: ${{ matrix.version }}
+          FORCE_REBUILD: ${{ github.event.inputs.force_rebuild || 'false' }}
+        run: |
+          OWNER_LOWER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_BASE="ghcr.io/${OWNER_LOWER}/netbox-postgres-seeded"
+          DUMP_PATH="dist/netbox-${TARGET_VERSION}.sql.gz"
+          DUMP_SIZE=$(du -h "${DUMP_PATH}" | cut -f1)
+
+          sed -e 's/^[[:space:]]*//' <<EOF > release_notes.md
+          # ${TARGET_VERSION}
+
+          Pre-migrated PostgreSQL database image and raw SQL dump for **NetBox ${TARGET_VERSION}**.
+
+          ---
+
+          ### 🐳 Option A: Public Docker Image (GHCR)
+          No login required — pull directly from GitHub Container Registry:
+          \`\`\`bash
+          docker pull ${IMAGE_BASE}:${TARGET_VERSION}
+          \`\`\`
+
+          ### 📦 Option B: Direct SQL Dump Download
+          Download the pre-seeded PostgreSQL dump and mount it into standard \`postgres:18-alpine\`:
+          \`\`\`bash
+          curl -fL -o netbox-${TARGET_VERSION}.sql.gz "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TARGET_VERSION}/netbox-${TARGET_VERSION}.sql.gz"
+          \`\`\`
+
+          ---
+
+          ### 🔑 Test Credentials (Pre-Configured)
+          | Parameter | Value |
+          | :--- | :--- |
+          | **Username** | \`admin\` |
+          | **Password** | \`uchae4uSeiYah5roe7gauYaer\` |
+          | **Auth Header** | \`Authorization: Bearer nbt_haiweeni2Aiv.ahgeechahdaighah6queivoo6ahChahgo2ohch9inahyei5ahk\` |
+          | **Token Pepper** | \`Qy+F=OTeGskWQ(wTMgjc+NPPlz6YwFXY=KHIIg=wpYXT&e(6u8\` |
+
+          *(For legacy NetBox < 4.5, use header: \`Authorization: Token 0123456789abcdef0123456789abcdef01234567\`)*
+
+          ---
+
+          ### 📖 Documentation & Examples
+          Complete Docker Compose, GitHub Actions, and GitLab CI examples:
+          [Repository README](https://github.com/${GITHUB_REPOSITORY}#readme)
+          EOF
+
+          # Check if release exists
+          if gh release view "${TARGET_VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${TARGET_VERSION} already exists."
+            if [ "${FORCE_REBUILD}" == "true" ]; then
+              echo "Force rebuild enabled. Overwriting release asset..."
+              gh release upload "${TARGET_VERSION}" "${DUMP_PATH}" --clobber --repo "${GITHUB_REPOSITORY}"
+              gh release edit "${TARGET_VERSION}" --title "${TARGET_VERSION}" --notes-file release_notes.md --repo "${GITHUB_REPOSITORY}"
+            fi
+          else
+            echo "Creating GitHub Release ${TARGET_VERSION}..."
+            gh release create "${TARGET_VERSION}" "${DUMP_PATH}" \
+              --title "${TARGET_VERSION}" \
+              --notes-file release_notes.md \
+              --repo "${GITHUB_REPOSITORY}"
+          fi
+
+      - name: Generate Job Summary
+        run: |
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_BASE="ghcr.io/${OWNER_LOWER}/netbox-postgres-seeded"
+          DUMP_PATH="dist/netbox-${{ matrix.version }}.sql.gz"
+          DUMP_SIZE=$(du -h "${DUMP_PATH}" | cut -f1)
+
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## 🚀 NetBox Seeded DB Published (\`${{ matrix.version }}\`)
+
+          | Property | Value |
+          | :--- | :--- |
+          | **Target NetBox Version** | \`${{ matrix.version }}\` |
+          | **Docker Image (GHCR)** | \`${IMAGE_BASE}:${{ matrix.version }}\` |
+          | **SQL Dump Size** | \`${DUMP_SIZE}\` |
+          | **Test Verification** | ✅ Passed (Dump imported & NetBox API authenticated) |
+          | **Release Download** | [netbox-${{ matrix.version }}.sql.gz](https://github.com/${{ github.repository }}/releases/download/${{ matrix.version }}/netbox-${{ matrix.version }}.sql.gz) |
+
+          ### Quick Docker Pull
+          \`\`\`bash
+          docker pull ${IMAGE_BASE}:${{ matrix.version }}
+          \`\`\`
+          EOF

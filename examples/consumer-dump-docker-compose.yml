@@ -1,0 +1,70 @@
+services:
+  # ============================================================================
+  # Vanilla PostgreSQL: Auto-imports the .sql.gz dump on first startup!
+  # Startup & import time: ~1-2 seconds.
+  # ============================================================================
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: netbox
+      POSTGRES_USER: netbox
+      POSTGRES_PASSWORD: netboxpassword
+    # CI Tuning: Disable fsync because test containers are ephemeral (3x-5x speedup)
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+    # Mount the raw SQL dump into the official PostgreSQL init directory.
+    # Download directly from GitHub Releases:
+    # curl -fL -o dist/netbox-latest.sql.gz https://github.com/i-am-smolli/netbox-seeded-db/releases/download/latest/netbox-latest.sql.gz
+    volumes:
+      - ${NETBOX_DUMP_FILE:-../dist/netbox-latest.sql.gz}:/docker-entrypoint-initdb.d/01-netbox.sql.gz:ro
+    # Keep the database in RAM (tmpfs) for lightning-fast write operations
+    tmpfs:
+      - /var/lib/postgresql:size=512m
+    healthcheck:
+      test: pg_isready -q -d netbox -U netbox
+      interval: 1s
+      timeout: 3s
+      retries: 20
+
+  valkey:
+    image: valkey/valkey:9.1-alpine
+    command: valkey-server --save "" --appendonly no
+
+  # ============================================================================
+  # NetBox Application
+  # Because the dump already contains all tables, migrations, and superuser,
+  # the entrypoint skips the 2-3 minute migration block and starts immediately!
+  # ============================================================================
+  netbox:
+    image: docker.io/netboxcommunity/netbox:${NETBOX_VERSION:-latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+    ports:
+      - "${PORT:-8000}:8080"
+    environment:
+      DB_HOST: postgres
+      DB_NAME: netbox
+      DB_USER: netbox
+      DB_PASSWORD: netboxpassword
+      REDIS_HOST: valkey
+      REDIS_CACHE_HOST: valkey
+      SECRET_KEY: "dummy-key-for-test-pipeline-environment-only-minimum-50-chars"
+      API_TOKEN_PEPPER_1: "Qy+F=OTeGskWQ(wTMgjc+NPPlz6YwFXY=KHIIg=wpYXT&e(6u8"
+      # IMPORTANT: Skips superuser creation (already created in the seeded DB!)
+      SKIP_SUPERUSER: "true"
+      # Reduces DB wait timeout since Postgres is already ready
+      DB_WAIT_TIMEOUT: 1
+    healthcheck:
+      test: curl -sf http://localhost:8080/login/ >/dev/null || exit 1
+      interval: 2s
+      timeout: 3s
+      retries: 20

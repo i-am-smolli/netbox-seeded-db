@@ -1,0 +1,66 @@
+services:
+  # ============================================================================
+  # Pre-Seeded PostgreSQL: Starts with all tables & schema already migrated!
+  # Startup time: ~1-2 seconds.
+  # ============================================================================
+  postgres:
+    # Public image on GitHub Container Registry (no docker login required):
+    image: ${NETBOX_SEEDED_IMAGE:-ghcr.io/i-am-smolli/netbox-postgres-seeded:latest}
+    environment:
+      POSTGRES_DB: netbox
+      POSTGRES_USER: netbox
+      POSTGRES_PASSWORD: netboxpassword
+    # CI Tuning: Disable fsync because test containers are ephemeral (3x-5x speedup)
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+    # Keep the database in RAM (tmpfs) for lightning-fast write operations
+    tmpfs:
+      - /var/lib/postgresql:size=512m
+    healthcheck:
+      test: pg_isready -q -d netbox -U netbox
+      interval: 1s
+      timeout: 3s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:9.1-alpine
+    command: valkey-server --save "" --appendonly no
+
+  # ============================================================================
+  # NetBox Application
+  # Because all migrations & superuser already exist in the DB, the
+  # entrypoint skips the 2-3 minute migration block and starts Granian directly!
+  # ============================================================================
+  netbox:
+    image: docker.io/netboxcommunity/netbox:${NETBOX_VERSION:-latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+    ports:
+      - "8000:8080"
+    environment:
+      DB_HOST: postgres
+      DB_NAME: netbox
+      DB_USER: netbox
+      DB_PASSWORD: netboxpassword
+      REDIS_HOST: valkey
+      REDIS_CACHE_HOST: valkey
+      SECRET_KEY: "dummy-key-for-test-pipeline-environment-only-minimum-50-chars"
+      API_TOKEN_PEPPER_1: "Qy+F=OTeGskWQ(wTMgjc+NPPlz6YwFXY=KHIIg=wpYXT&e(6u8"
+      # IMPORTANT: Skips superuser creation (already created in the seeded DB!)
+      SKIP_SUPERUSER: "true"
+      # Reduces DB wait timeout since Postgres is already ready
+      DB_WAIT_TIMEOUT: 1
+    healthcheck:
+      test: curl -sf http://localhost:8080/login/ >/dev/null || exit 1
+      interval: 2s
+      timeout: 3s
+      retries: 20

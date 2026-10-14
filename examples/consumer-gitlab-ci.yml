@@ -1,0 +1,56 @@
+# ==============================================================================
+# Example: Downstream GitLab CI Pipeline
+# 
+# Demonstrates how a test job spins up NetBox in seconds and runs tests/Ansible/Terraform
+# against the NetBox API.
+# ==============================================================================
+
+stages:
+  - test
+
+test-against-netbox:
+  stage: test
+  image: docker:27-cli
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    NETBOX_VERSION: "latest"
+    # Pull the public image from GitHub Container Registry (no login required!):
+    NETBOX_SEEDED_IMAGE: "ghcr.io/i-am-smolli/netbox-postgres-seeded:$NETBOX_VERSION"
+    NETBOX_API_TOKEN: "nbt_haiweeni2Aiv.ahgeechahdaighah6queivoo6ahChahgo2ohch9inahyei5ahk"
+  before_script:
+    - apk add --no-cache curl jq docker-cli-compose bash
+  script:
+    - echo "⏱️ Starting NetBox test environment..."
+    - START_TIME=$(date +%s)
+    - docker compose -f examples/consumer-docker-compose.yml up -d
+
+    - echo "⏳ Waiting for NetBox health check..."
+    - |
+      until [ "$(docker inspect -f '{{.State.Health.Status}}' $(docker compose -f examples/consumer-docker-compose.yml ps -q netbox))" == "healthy" ]; do
+        sleep 1
+        printf "."
+      done
+    - END_TIME=$(date +%s)
+    - echo "🚀 NetBox is online and healthy in $((END_TIME - START_TIME)) seconds!"
+
+    - echo "🧪 Running API tests..."
+    - |
+      STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+        -H "Authorization: Bearer ${NETBOX_API_TOKEN}" \
+        http://docker:8000/api/status/)
+      if [ "$STATUS_CODE" -eq 200 ]; then
+        echo "✅ API status check succeeded (HTTP 200)"
+      else
+        echo "❌ API status check failed (HTTP $STATUS_CODE)"
+        exit 1
+      fi
+
+    # Run your Ansible, Terraform, Python, or pytest scripts here:
+    # - pytest tests/
+    # - ansible-playbook site.yml
+
+  after_script:
+    - docker compose -f examples/consumer-docker-compose.yml down -v
