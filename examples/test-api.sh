@@ -30,32 +30,56 @@ if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
 fi
 
 # 1. Test basic API status & detect version
-STATUS_RESPONSE=$(curl -s \
-  --connect-timeout 5 \
-  --max-time 10 \
-  -H "Authorization: Bearer nbt_haiweeni2Aiv.ahgeechahdaighah6queivoo6ahChahgo2ohch9inahyei5ahk" \
-  -H "Accept: application/json" \
-  "${NETBOX_URL}/api/status/" || true)
+STATUS_RESPONSE=""
+for retry in {1..10}; do
+  if [ -n "${USER_TOKEN}" ]; then
+    if [[ "${USER_TOKEN}" == *" "* ]]; then
+      AUTH_TRY="${USER_TOKEN}"
+    elif [[ "${USER_TOKEN}" == nbt_* ]]; then
+      AUTH_TRY="Bearer ${USER_TOKEN}"
+    else
+      AUTH_TRY="Token ${USER_TOKEN}"
+    fi
+    STATUS_RESPONSE=$(curl -s \
+      --connect-timeout 5 \
+      --max-time 10 \
+      -H "Authorization: ${AUTH_TRY}" \
+      -H "Accept: application/json" \
+      "${NETBOX_URL}/api/status/" || true)
+  else
+    # NetBox >= 4.5 default token
+    STATUS_RESPONSE=$(curl -s \
+      --connect-timeout 5 \
+      --max-time 10 \
+      -H "Authorization: Bearer nbt_haiweeni2Aiv.ahgeechahdaighah6queivoo6ahChahgo2ohch9inahyei5ahk" \
+      -H "Accept: application/json" \
+      "${NETBOX_URL}/api/status/" || true)
 
+    if ! echo "${STATUS_RESPONSE}" | grep -q "netbox-version"; then
+      # Fallback for legacy versions (< 4.5) with LOGIN_REQUIRED
+      STATUS_RESPONSE=$(curl -s \
+        --connect-timeout 5 \
+        --max-time 10 \
+        -H "Authorization: Token 0123456789abcdef0123456789abcdef01234567" \
+        -H "Accept: application/json" \
+        "${NETBOX_URL}/api/status/" || true)
+    fi
 
-if ! echo "${STATUS_RESPONSE}" | grep -q "netbox-version"; then
-  # Fallback for legacy versions (< 4.5) with LOGIN_REQUIRED
-  STATUS_RESPONSE=$(curl -s \
-    --connect-timeout 5 \
-    --max-time 10 \
-    -H "Authorization: Token 0123456789abcdef0123456789abcdef01234567" \
-    -H "Accept: application/json" \
-    "${NETBOX_URL}/api/status/" || true)
-fi
+    if ! echo "${STATUS_RESPONSE}" | grep -q "netbox-version"; then
+      # Fallback without authentication
+      STATUS_RESPONSE=$(curl -s \
+        --connect-timeout 5 \
+        --max-time 10 \
+        -H "Accept: application/json" \
+        "${NETBOX_URL}/api/status/" || true)
+    fi
+  fi
 
-if ! echo "${STATUS_RESPONSE}" | grep -q "netbox-version"; then
-  # Fallback without authentication
-  STATUS_RESPONSE=$(curl -s \
-    --connect-timeout 5 \
-    --max-time 10 \
-    -H "Accept: application/json" \
-    "${NETBOX_URL}/api/status/" || true)
-fi
+  if echo "${STATUS_RESPONSE}" | grep -q "netbox-version"; then
+    break
+  fi
+  sleep 1
+done
 
 if ! echo "${STATUS_RESPONSE}" | grep -q "netbox-version"; then
   echo "❌ Error: Could not retrieve API status from NetBox:"
@@ -68,11 +92,15 @@ echo "✅ NetBox is responsive (Version: ${VERSION})"
 
 # 2. Select appropriate token based on user input or detected NetBox version
 if [ -n "${USER_TOKEN}" ]; then
-  TOKEN="${USER_TOKEN}"
-  if [[ "${TOKEN}" == nbt_* ]]; then
+  if [[ "${USER_TOKEN}" == *" "* ]]; then
+    AUTH_PREFIX=""
+    TOKEN="${USER_TOKEN}"
+  elif [[ "${USER_TOKEN}" == nbt_* ]]; then
     AUTH_PREFIX="Bearer"
+    TOKEN="${USER_TOKEN}"
   else
     AUTH_PREFIX="Token"
+    TOKEN="${USER_TOKEN}"
   fi
 else
   # Auto-detect token based on version:
@@ -87,11 +115,15 @@ else
 fi
 
 # 3. Test token authentication on protected endpoint
-echo "🔑 Verifying API superuser token (${AUTH_PREFIX})..."
+AUTH_HEADER="Authorization: ${AUTH_PREFIX} ${TOKEN}"
+if [ -z "${AUTH_PREFIX}" ]; then
+  AUTH_HEADER="Authorization: ${TOKEN}"
+fi
+echo "🔑 Verifying API superuser token (${AUTH_PREFIX:-custom})..."
 AUTH_RESPONSE=$(curl -s \
   --connect-timeout 5 \
   --max-time 10 \
-  -H "Authorization: ${AUTH_PREFIX} ${TOKEN}" \
+  -H "${AUTH_HEADER}" \
   -H "Accept: application/json" \
   "${NETBOX_URL}/api/users/users/" || true)
 

@@ -157,8 +157,29 @@ done
 echo ""
 echo "✅ NetBox is healthy! (Took ~${ELAPSED}s in RAM)"
 
-echo "💾 [3/4] Exporting PostgreSQL Dump..."
 PG_CID=$(docker compose -p "${PROJECT_NAME}" -f "${TMP_DIR}/docker-compose.yml" ps -q postgres)
+
+# NetBox >= 4.5 generates a random 12-char key if not explicitly set in the model.
+# Update the key deterministically so consumers can authenticate with predictable test credentials.
+if [ -n "${API_KEY}" ]; then
+  echo "🔑 Setting deterministic API token key '${API_KEY}'..."
+  docker exec "${PG_CID}" psql -U netbox -d netbox -c \
+    "UPDATE users_token SET key = '${API_KEY}' WHERE user_id = (SELECT id FROM users_user WHERE username = '${ADMIN_USER}');" >/dev/null
+fi
+
+# Verify API token before dumping to guarantee image integrity
+echo "🔍 Verifying API superuser token..."
+if ! docker exec "${NETBOX_CID}" curl -sf \
+  -H "Authorization: ${AUTH_TYPE} ${FULL_AUTH_TOKEN}" \
+  -H "Accept: application/json" \
+  http://localhost:8080/api/users/users/ >/dev/null; then
+  echo "❌ Error: API token verification failed on temporary stack!"
+  docker compose -p "${PROJECT_NAME}" -f "${TMP_DIR}/docker-compose.yml" logs netbox
+  exit 1
+fi
+echo "✅ API token successfully verified!"
+
+echo "💾 [3/4] Exporting PostgreSQL Dump..."
 DUMP_FILE="${REPO_ROOT}/dist/netbox-${NETBOX_VERSION}.sql.gz"
 
 docker exec "${PG_CID}" pg_dump \
