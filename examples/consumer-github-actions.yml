@@ -1,9 +1,10 @@
 # ==============================================================================
 # Example: Downstream GitHub Actions Workflow
 #
-# Demonstrates how any GitHub repository can boot NetBox in under 5 seconds
+# Demonstrates how any GitHub repository can boot NetBox in ~20 seconds (vs 3+ minutes)
 # using the pre-seeded PostgreSQL image from GitHub Container Registry (ghcr.io),
 # and run Pytest, Ansible, Terraform, or API tests against it.
+# NOTE: FOR TEST/CI ENVIRONMENTS ONLY - NEVER USE IN PRODUCTION!
 # ==============================================================================
 name: Test Against Ephemeral NetBox
 
@@ -35,7 +36,7 @@ jobs:
 
       - name: Wait for NetBox Health Check
         run: |
-          echo "⏳ Waiting for NetBox to be healthy (typically ~3-5 seconds)..."
+          echo "⏳ Waiting for NetBox to be healthy (typically ~20 seconds)..."
           until [ "$(docker inspect -f '{{.State.Health.Status}}' $(docker compose -f examples/consumer-docker-compose.yml ps -q netbox))" == "healthy" ]; do
             sleep 1
             printf "."

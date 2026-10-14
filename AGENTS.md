@@ -17,7 +17,7 @@ When downstream pipelines use this seeded database image instead of standard `po
 - Postgres starts in **1 second** and applies the dump immediately.
 - NetBox detects that all migrations already exist (`manage.py migrate --check` returns 0).
 - The entire 2-minute migration and indexing block is skipped.
-- NetBox starts in **3 to 6 seconds**.
+- NetBox starts in **~20 seconds** (saving 2–3 minutes on every run).
 
 ---
 

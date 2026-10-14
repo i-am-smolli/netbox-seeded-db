@@ -5,10 +5,14 @@
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg?style=flat-square)](LICENSE)
 [![Docker Image](https://img.shields.io/badge/GHCR-netbox--postgres--seeded-blue?logo=docker&style=flat-square)](https://github.com/i-am-smolli/netbox-seeded-db/pkgs/container/netbox-postgres-seeded)
 
-> **NetBox startup in CI/CD pipelines: From minutes down to under 5 seconds.**  
+> **NetBox startup in CI/CD pipelines: From minutes down to ~20 seconds.**  
 > **Public, automated, and free for the open-source NetBox community.**
 
-This repository automatically builds and publishes a **pre-migrated PostgreSQL Docker image** (`ghcr.io`) and a **compressed SQL dump** (`.sql.gz`) for every released NetBox version.
+This repository automatically builds and publishes a **pre-migrated PostgreSQL Docker image** (`ghcr.io`) and a **compressed SQL dump** (`.sql.gz`) for every released NetBox version since v4.4.10.
+
+> ### ⚠️ Security Warning — Strictly for CI/CD & Local Development
+> **NEVER use this database image or SQL dump in a production environment!**  
+> This database contains **hardcoded, publicly known credentials** (default `admin` credentials, static API tokens, and pre-shared token pepper). It is strictly intended for **ephemeral CI/CD test pipelines** and **local development/testing**. Deploying this in production or on any publicly accessible instance poses an immediate, critical security risk.
 
 ---
 
@@ -33,7 +37,7 @@ Instead of starting with an empty `postgres:alpine`, downstream pipelines use th
 2. NetBox runs `./manage.py migrate --check` &rarr; **0 pending migrations**.
 3. The 2–3 minute migration and reindexing block is **completely skipped**.
 4. NetBox immediately launches the Granian application server.
-5. **NetBox is healthy and ready to serve API requests in 3 to 6 seconds!**
+5. **NetBox is healthy and ready to serve API requests in around 20 seconds!**
 
 ---
 
@@ -41,16 +45,15 @@ Instead of starting with an empty `postgres:alpine`, downstream pipelines use th
 
 | Metric | Standard Setup | With Seeded DB |
 | :--- | :--- | :--- |
-| **PostgreSQL Startup** | ~5s | **~1s** |
-| **Django Migrations** | ~120s – 180s | **0s** (skipped) |
-| **Search Reindex & Init** | ~15s | **0s** (skipped) |
-| **Superuser Creation** | ~4s | **0s** (pre-created) |
-| **Total NetBox Boot Time** | **~2.5 to 3.5 minutes** | **~3 to 6 seconds** 🚀 |
-| **Speedup** | Baseline | **~30x faster** |
+| **Total NetBox Boot Time** | **~2.5 to 3.5 minutes** | **~20 to 25 seconds** 🚀 |
+| **Speedup** | Baseline | **~7x to 10x faster** |
 
 ---
 
 ## 📦 Pre-Configured Test Credentials
+
+> [!WARNING]
+> Because these credentials are publicly documented and baked directly into the database dumps, **never deploy this database in production or use these credentials in a real environment**.
 
 Every image and dump comes with a pre-created test superuser and valid API token:
 
@@ -87,7 +90,7 @@ jobs:
           until [ "$(docker inspect -f '{{.State.Health.Status}}' $(docker compose -f examples/consumer-docker-compose.yml ps -q netbox))" == "healthy" ]; do
             sleep 1
           done
-          echo "🚀 NetBox is ready in ~4 seconds!"
+          echo "🚀 NetBox is ready in ~20 seconds!"
 
       - name: Run Tests
         env:

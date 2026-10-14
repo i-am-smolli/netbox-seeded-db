@@ -1,8 +1,9 @@
 # ==============================================================================
 # Example: Downstream GitLab CI Pipeline
 # 
-# Demonstrates how a test job spins up NetBox in seconds and runs tests/Ansible/Terraform
+# Demonstrates how a test job spins up NetBox in ~20 seconds and runs tests/Ansible/Terraform
 # against the NetBox API.
+# NOTE: FOR TEST/CI ENVIRONMENTS ONLY - NEVER USE IN PRODUCTION!
 # ==============================================================================
 
 stages:
