@@ -111,12 +111,7 @@ services:
       SECRET_KEY: "dummy-secret-key-for-seed-generation-purpose-only-minimum-50-chars"
       API_TOKEN_PEPPER_1: "${API_TOKEN_PEPPER_1}"
       DB_WAIT_DEBUG: 1
-      SKIP_SUPERUSER: "false"
-      SUPERUSER_NAME: "${ADMIN_USER}"
-      SUPERUSER_EMAIL: "${ADMIN_EMAIL}"
-      SUPERUSER_PASSWORD: "${ADMIN_PASSWORD}"
-      SUPERUSER_API_KEY: "${API_KEY}"
-      SUPERUSER_API_TOKEN: "${API_TOKEN}"
+      SKIP_SUPERUSER: "true"
       DB_WAIT_TIMEOUT: 1
     healthcheck:
       test: curl -sf http://localhost:8080/login/ >/dev/null || exit 1
@@ -159,12 +154,41 @@ echo "✅ NetBox is healthy! (Took ~${ELAPSED}s in RAM)"
 
 PG_CID=$(docker compose -p "${PROJECT_NAME}" -f "${TMP_DIR}/docker-compose.yml" ps -q postgres)
 
-# NetBox >= 4.5 generates a random 12-char key if not explicitly set in the model.
-# Update the key deterministically so consumers can authenticate with predictable test credentials.
+# Explicitly provision predictable superuser and API token.
+# This bypasses upstream netbox-docker entrypoint bugs (such as v4.5.0 passing 40-char tokens into VARCHAR(12) key).
+echo "🔑 Provisioning superuser '${ADMIN_USER}' and API credentials..."
 if [ -n "${API_KEY}" ]; then
-  echo "🔑 Setting deterministic API token key '${API_KEY}'..."
-  docker exec "${PG_CID}" psql -U netbox -d netbox -c \
-    "UPDATE users_token SET key = '${API_KEY}' WHERE user_id = (SELECT id FROM users_user WHERE username = '${ADMIN_USER}');" >/dev/null
+  # NetBox >= 4.5 uses v2 tokens (key + hashed token with pepper)
+  docker exec -i "${NETBOX_CID}" ./manage.py shell --interface python <<EOF
+from users.models import Token, User
+from users.choices import TokenVersionChoices
+u = User.objects.filter(username='${ADMIN_USER}').first()
+if not u:
+    u = User.objects.create_superuser('${ADMIN_USER}', '${ADMIN_EMAIL}', '${ADMIN_PASSWORD}')
+else:
+    u.set_password('${ADMIN_PASSWORD}')
+    u.save()
+Token.objects.filter(user=u).delete()
+Token.objects.create(
+    user=u,
+    key='${API_KEY}',
+    token='${API_TOKEN}',
+    version=TokenVersionChoices.V2
+)
+EOF
+else
+  # NetBox < 4.5 uses legacy v1 tokens (plaintext 40-char key)
+  docker exec -i "${NETBOX_CID}" ./manage.py shell --interface python <<EOF
+from users.models import Token, User
+u = User.objects.filter(username='${ADMIN_USER}').first()
+if not u:
+    u = User.objects.create_superuser('${ADMIN_USER}', '${ADMIN_EMAIL}', '${ADMIN_PASSWORD}')
+else:
+    u.set_password('${ADMIN_PASSWORD}')
+    u.save()
+Token.objects.filter(user=u).delete()
+Token.objects.create(user=u, key='${API_TOKEN}')
+EOF
 fi
 
 # Verify API token before dumping to guarantee image integrity
