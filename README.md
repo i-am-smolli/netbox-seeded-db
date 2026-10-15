@@ -209,13 +209,20 @@ You can build and test images locally on your machine:
 
 ```bash
 # 1. Build a pre-seeded image for a specific NetBox version (or 'latest')
-./scripts/build-seeded-db.sh v4.7.3
+./scripts/build-seeded-db.sh v4.5.10
 
 # 2. Test the raw SQL dump integrity & boot speed
-./scripts/test-dump.sh v4.7.3
+./scripts/test-dump.sh v4.5.10
 
-# 3. Test API connectivity
-./examples/test-api.sh http://127.0.0.1:8001
+# 3. Test the pre-seeded PostgreSQL Docker image
+./scripts/test-image.sh v4.5.10
+
+# 4. Multi-version Matrix: Build & thoroughly test image + dump across multiple versions:
+./scripts/build-and-test.sh v4.5.0 v4.4.10 v4.5.10
+# or comma-separated:
+./scripts/build-and-test.sh "v4.5.0, v4.4.10, v4.5.10"
+# or test existing artifacts without rebuilding:
+./scripts/build-and-test.sh --skip-build v4.5.0 v4.5.10
 ```
 
 ---

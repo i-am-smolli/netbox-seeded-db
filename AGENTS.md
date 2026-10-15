@@ -35,9 +35,11 @@ When downstream pipelines use this seeded database image instead of standard `po
 ├── README.md                         # Public documentation and consumption instructions
 ├── AGENTS.md                         # This file
 ├── scripts/
-│   ├── build-seeded-db.sh            # Starts NetBox in tmpfs, dumps DB, builds Docker image
-│   ├── check-new-versions.sh         # Compares upstream GitHub releases vs repository releases
-│   └── test-dump.sh                  # Tests raw SQL dump against vanilla postgres + NetBox
+│   ├── build-and-test.sh         # Multi-version orchestrator: builds & verifies image + dump across versions
+│   ├── build-seeded-db.sh        # Starts NetBox in tmpfs, dumps DB, builds Docker image
+│   ├── check-new-versions.sh     # Compares upstream GitHub releases vs repository releases
+│   ├── test-dump.sh              # Tests raw SQL dump against vanilla postgres + NetBox
+│   └── test-image.sh             # Tests pre-seeded PostgreSQL Docker image + NetBox
 └── examples/
     ├── consumer-docker-compose.yml      # Drop-in compose using seeded Docker image (Option A)
     ├── consumer-dump-docker-compose.yml # Drop-in compose using raw SQL dump (Option B)
